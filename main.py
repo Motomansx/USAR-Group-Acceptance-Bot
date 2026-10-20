@@ -16,10 +16,10 @@ ROBLOX_API_KEY = os.getenv("ROBLOX_API_KEY")
 TARGET_GUILD_ID = 1526053959813566595
 DISCHARGE_CHANNEL_ID = 1546762883617001532
 
-# Updated Group Structure with Main Group ID and Divisions
+# Updated Group Structure with the test Group ID (33808299) and Divisions
 COMMAND_IDS = {
     "Military Police Corps": {
-        "main_id": "33947594",
+        "main_id": "33808299",
         "divisions": {
             "Military Police School": "48490266",
             "Judge Advocate General Corps": "61790730",
