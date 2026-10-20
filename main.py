@@ -371,7 +371,7 @@ class HighCommandReviewView(discord.ui.View):
       return
 
     main_group_id = command_info["main_id"]
-    division_id = command_info["divisions"].get(self.division)
+    division_id = command_info["divisions"].get(self.division) if self.division else None
 
     # 1. Update Main Group Rank
     main_role_id = await get_target_role_id(main_group_id, self.main_rank)
@@ -389,7 +389,7 @@ class HighCommandReviewView(discord.ui.View):
       )
       return
 
-    # 2. Update Division Group Rank (if division selected)
+    # 2. Update Division Group Rank (if division and division rank are provided)
     if division_id and self.division_rank and self.division_rank != "None":
       div_role_id = await get_target_role_id(division_id, self.division_rank)
       if div_role_id:
@@ -409,9 +409,10 @@ class HighCommandReviewView(discord.ui.View):
     except Exception:
       pass
 
+    div_display = f" | Division: {self.division} - {self.division_rank}" if self.division and self.division_rank else ""
     success_text = (
         f"Successfully approved and admitted **{self.username}** into"
-        f" **{self.command_name}** (Main Rank: {self.main_rank} | Division: {self.division} - {self.division_rank}) by {interaction.user.mention}!"
+        f" **{self.command_name}** (Main Rank: {self.main_rank}{div_display}) by {interaction.user.mention}!"
     )
     await interaction.followup.send(success_text, ephemeral=False)
 
@@ -429,7 +430,7 @@ class HighCommandReviewView(discord.ui.View):
         log_embed.add_field(name="Target User", value=self.username, inline=True)
         log_embed.add_field(name="Command", value=self.command_name, inline=True)
         log_embed.add_field(name="Main Rank", value=self.main_rank, inline=True)
-        log_embed.add_field(name="Division & Rank", value=f"{self.division} ({self.division_rank})", inline=True)
+        log_embed.add_field(name="Division & Rank", value=f"{self.division} ({self.division_rank})" if self.division else "None", inline=True)
         await log_channel.send(embed=log_embed)
 
   @discord.ui.button(
@@ -600,12 +601,12 @@ async def grouprequest(
     username: str,
     discord_id: str,
     command: app_commands.Choice[str],
-    division: app_commands.Choice[str],
     main_rank: str,
-    division_rank: str,
     company: str,
     notes: str,
     proof: discord.Attachment,
+    division: app_commands.Choice[str] = None,
+    division_rank: str = "None",
 ):
   config = SERVER_CONFIGS.get(interaction.guild_id, {})
   grouprequest_channel_id = config.get("grouprequest_channel")
@@ -685,12 +686,13 @@ async def grouprequest(
       int(bg["discord_created"].timestamp()) if bg["discord_created"] else int(datetime.now().timestamp())
   )
 
+  division_name_display = division.name if division else "None"
   security_text = (
       f"**Tryout Proof / Group Acceptance Review**\n"
       f"A new tryout result has been submitted for High Command review.\n\n"
       f"• **Attendee Username:** {username}\n"
       f"• **Command:** {command.name}\n"
-      f"• **Division:** {division.name}\n"
+      f"• **Division:** {division_name_display}\n"
       f"• **Main Group Rank:** {main_rank}\n"
       f"• **Division Group Rank:** {division_rank}\n"
       f"• **Company:** {company}\n"
@@ -732,7 +734,7 @@ async def grouprequest(
   view = HighCommandReviewView(
       username=username,
       command_name=command.name,
-      division=division.name,
+      division=division.name if division else None,
       main_rank=main_rank,
       division_rank=division_rank,
       company=company,
@@ -762,7 +764,7 @@ async def grouprequest(
       logs_embed.add_field(name="Attendee Discord", value=discord_member.mention, inline=True)
       logs_embed.add_field(name="Attendee Roblox", value=username, inline=True)
       logs_embed.add_field(name="Command", value=command.name, inline=True)
-      logs_embed.add_field(name="Division", value=division.name, inline=True)
+      logs_embed.add_field(name="Division", value=division.name if division else "None", inline=True)
       logs_embed.add_field(name="Main Rank", value=main_rank, inline=True)
       logs_embed.add_field(name="Division Rank", value=division_rank, inline=True)
       logs_embed.add_field(name="Company", value=company, inline=True)
@@ -782,7 +784,7 @@ async def grouprequest(
 # Direct Group Rank Update Command (Restricted to Accepters/Admins)
 @bot.tree.command(
     name="changerank",
-    description="Directly change a member's rank in a Roblox group/division.",
+    description="Directly change a member's rank in a group/division.",
 )
 @app_commands.choices(
     command=[
@@ -804,9 +806,9 @@ async def changerank(
     interaction: discord.Interaction,
     username: str,
     command: app_commands.Choice[str],
-    division: app_commands.Choice[str],
     main_rank: str,
-    division_rank: str,
+    division: app_commands.Choice[str] = None,
+    division_rank: str = "None",
 ):
   if not check_accepter_permission(interaction):
     await interaction.response.send_message(
@@ -837,7 +839,7 @@ async def changerank(
     return
 
   main_group_id = command_info["main_id"]
-  division_id = command_info["divisions"].get(division.name)
+  division_id = command_info["divisions"].get(division.name) if division else None
 
   # 1. Update Main Group Rank
   main_role_id = await get_target_role_id(main_group_id, main_rank)
@@ -867,8 +869,9 @@ async def changerank(
         )
         return
 
+  div_display = f" | Division: {division.name} ({division_rank})" if division else ""
   await interaction.followup.send(
-      f"Successfully updated **{username}'s** rank to Main: **{main_rank}** | Division: **{division.name} ({division_rank})**!",
+      f"Successfully updated **{username}'s** rank to Main: **{main_rank}**{div_display}!",
       ephemeral=True,
   )
 
