@@ -17,16 +17,12 @@ ROBLOX_API_KEY = os.getenv("ROBLOX_API_KEY")
 TARGET_GUILD_ID = 1526053959813566595
 DISCHARGE_CHANNEL_ID = 1546762883617001532
 
-# Updated Group Structure with the test Group ID (33808299) and Divisions
+# Updated Group Structure: Military Police Corps (33808299) and 14th Brigade (33846212)
 COMMAND_IDS = {
     "Military Police Corps": {
         "main_id": "33808299",
         "divisions": {
-            "Military Police School": "48490266",
-            "Judge Advocate General Corps": "61790730",
-            "503rd Battalion": "35916795",
-            "14th Battalion": "167855785",
-            "Criminal Investigation Division": "73268634",
+            "14th Brigade": "33846212",
         },
     }
 }
@@ -779,19 +775,7 @@ async def setup_acceptor_log_channel(
         ),
     ],
     division=[
-        app_commands.Choice(
-            name="Military Police School", value="Military Police School"
-        ),
-        app_commands.Choice(
-            name="Judge Advocate General Corps",
-            value="Judge Advocate General Corps",
-        ),
-        app_commands.Choice(name="503rd Battalion", value="503rd Battalion"),
-        app_commands.Choice(name="14th Battalion", value="14th Battalion"),
-        app_commands.Choice(
-            name="Criminal Investigation Division",
-            value="Criminal Investigation Division",
-        ),
+        app_commands.Choice(name="14th Brigade", value="14th Brigade"),
     ],
 )
 @app_commands.autocomplete(
@@ -1022,19 +1006,7 @@ async def grouprequest(
         ),
     ],
     division=[
-        app_commands.Choice(
-            name="Military Police School", value="Military Police School"
-        ),
-        app_commands.Choice(
-            name="Judge Advocate General Corps",
-            value="Judge Advocate General Corps",
-        ),
-        app_commands.Choice(name="503rd Battalion", value="503rd Battalion"),
-        app_commands.Choice(name="14th Battalion", value="14th Battalion"),
-        app_commands.Choice(
-            name="Criminal Investigation Division",
-            value="Criminal Investigation Division",
-        ),
+        app_commands.Choice(name="14th Brigade", value="14th Brigade"),
     ],
 )
 @app_commands.autocomplete(
@@ -1133,19 +1105,7 @@ async def changerank(
         ),
     ],
     division=[
-        app_commands.Choice(
-            name="Military Police School", value="Military Police School"
-        ),
-        app_commands.Choice(
-            name="Judge Advocate General Corps",
-            value="Judge Advocate General Corps",
-        ),
-        app_commands.Choice(name="503rd Battalion", value="503rd Battalion"),
-        app_commands.Choice(name="14th Battalion", value="14th Battalion"),
-        app_commands.Choice(
-            name="Criminal Investigation Division",
-            value="Criminal Investigation Division",
-        ),
+        app_commands.Choice(name="14th Brigade", value="14th Brigade"),
     ],
 )
 async def kickgroup(
@@ -1247,3 +1207,4 @@ async def on_ready():
 
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
+
