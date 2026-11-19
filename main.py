@@ -1,9 +1,10 @@
+import asyncio
 from datetime import datetime, timezone
 import os
-import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
+import requests
 
 intents = discord.Intents.default()
 intents.members = True
@@ -46,26 +47,26 @@ def check_accepter_permission(interaction: discord.Interaction) -> bool:
 
 
 async def resolve_roblox_user(username: str) -> tuple[int | None, str]:
-  """Resolves an exact Roblox username to a user ID, falling back to first search match."""
+  """Resolves a Roblox username to a user ID, preferring an exact username match."""
   clean_name = username.strip()
   url = f"https://users.roblox.com/v1/users/search?keyword={clean_name}&limit=10"
-  timeout = aiohttp.ClientTimeout(total=10)
 
-  async with aiohttp.ClientSession(timeout=timeout) as session:
-    async with session.get(url) as resp:
-      if resp.status != 200:
-        return None, clean_name
-      payload = await resp.json()
-      results = payload.get("data", [])
-      if not results:
-        return None, clean_name
+  try:
+    resp = await asyncio.to_thread(requests.get, url, timeout=10)
+    if resp.status_code != 200:
+      return None, clean_name
+    results = resp.json().get("data", [])
+    if not results:
+      return None, clean_name
 
-      for item in results:
-        if item.get("name", "").lower() == clean_name.lower():
-          return int(item["id"]), item.get("name", clean_name)
+    for item in results:
+      if item.get("name", "").lower() == clean_name.lower():
+        return int(item["id"]), item.get("name", clean_name)
 
-      first = results[0]
-      return int(first["id"]), first.get("name", clean_name)
+    first = results[0]
+    return int(first["id"]), first.get("name", clean_name)
+  except Exception:
+    return None, clean_name
 
 
 async def scan_discharge_records(
@@ -169,62 +170,63 @@ async def fetch_security_background_check(
       "current_rank": "Guest / Unranked",
       "total_xp": 0,
   }
-  timeout = aiohttp.ClientTimeout(total=8)
 
-  async with aiohttp.ClientSession(timeout=timeout) as session:
-    # 1. Roblox Identity & Account Age Check
-    try:
-      async with session.get(
-          f"https://users.roblox.com/v1/users/{roblox_user_id}"
-      ) as user_resp:
-        if user_resp.status == 200:
-          u_json = await user_resp.json()
-          created_str = u_json.get("created", "")
-          data["roblox_display"] = u_json.get("displayName", username)
-          data["roblox_name"] = u_json.get("name", username)
-          if created_str:
-            dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-            data["account_age_days"] = (datetime.now(timezone.utc) - dt).days
-    except Exception:
-      pass
+  # 1. Roblox Identity & Account Age Check
+  try:
+    user_info_url = f"https://users.roblox.com/v1/users/{roblox_user_id}"
+    user_resp = await asyncio.to_thread(
+        requests.get, user_info_url, timeout=5
+    )
+    if user_resp.status_code == 200:
+      u_json = user_resp.json()
+      created_str = u_json.get("created", "")
+      data["roblox_display"] = u_json.get("displayName", username)
+      data["roblox_name"] = u_json.get("name", username)
+      if created_str:
+        dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+        data["account_age_days"] = (datetime.now(timezone.utc) - dt).days
+  except Exception:
+    pass
 
-    # Badges count check
-    try:
-      async with session.get(
-          f"https://badges.roblox.com/v1/users/{roblox_user_id}/badges?limit=10"
-      ) as b_resp:
-        if b_resp.status == 200:
-          b_json = await b_resp.json()
-          data["badges_earned"] = len(b_json.get("data", []))
-    except Exception:
-      pass
+  # Badges count check
+  try:
+    badges_url = (
+        f"https://badges.roblox.com/v1/users/{roblox_user_id}/badges?limit=10"
+    )
+    b_resp = await asyncio.to_thread(requests.get, badges_url, timeout=5)
+    if b_resp.status_code == 200:
+      data["badges_earned"] = len(b_resp.json().get("data", []))
+  except Exception:
+    pass
 
-    # Alias history check
-    try:
-      async with session.get(
-          f"https://users.roblox.com/v1/users/{roblox_user_id}/username-history"
-      ) as a_resp:
-        if a_resp.status == 200:
-          a_json = await a_resp.json()
-          history = a_json.get("data", [])
-          if history:
-            data["aliases"] = [h.get("name") for h in history if h.get("name")]
-    except Exception:
-      pass
+  # Alias history check
+  try:
+    aliases_url = (
+        f"https://users.roblox.com/v1/users/{roblox_user_id}/username-history"
+    )
+    a_resp = await asyncio.to_thread(requests.get, aliases_url, timeout=5)
+    if a_resp.status_code == 200:
+      history = a_resp.json().get("data", [])
+      if history:
+        data["aliases"] = [h.get("name") for h in history if h.get("name")]
+  except Exception:
+    pass
 
-    # 2. Group Status & Rank Check
-    try:
-      async with session.get(
-          f"https://groups.roblox.com/v1/users/{roblox_user_id}/groups/roles"
-      ) as g_resp:
-        if g_resp.status == 200:
-          g_json = await g_resp.json()
-          for g in g_json.get("data", []):
-            if str(g.get("group", {}).get("id")) == str(group_id):
-              data["current_rank"] = g.get("role", {}).get("name", "Member")
-              break
-    except Exception:
+  # 2. Group Status & Rank Check
+  try:
+    group_roles_url = (
+        f"https://groups.roblox.com/v1/users/{roblox_user_id}/groups/roles"
+    )
+    g_resp = await asyncio.to_thread(requests.get, group_roles_url, timeout=5)
+    if g_resp.status_code == 200:
+      for g in g_resp.json().get("data", []):
+        if str(g.get("group", {}).get("id")) == str(group_id):
+          data["current_rank"] = g.get("role", {}).get("name", "Member")
+          break
+    else:
       data["current_rank"] = "Unknown"
+  except Exception:
+    data["current_rank"] = "Unknown"
 
   # 3. Discharge Records Scan
   discharge_info = await scan_discharge_records(guild, username, discord_member)
@@ -255,32 +257,30 @@ async def fetch_security_background_check(
 
 async def get_target_role_id(group_id: str, rank_name: str) -> str | None:
   headers = {"x-api-key": ROBLOX_API_KEY} if ROBLOX_API_KEY else {}
-  timeout = aiohttp.ClientTimeout(total=10)
+  roles_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles"
+  roles_resp = await asyncio.to_thread(
+      requests.get, roles_url, headers=headers, timeout=10
+  )
 
-  async with aiohttp.ClientSession(timeout=timeout) as session:
-    roles_url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles"
-    async with session.get(roles_url, headers=headers) as roles_resp:
-      if roles_resp.status == 200:
-        r_json = await roles_resp.json()
-        for r in r_json.get("groupRoles", []):
-          if r.get("displayName", "").lower() == rank_name.lower():
-            path_parts = r.get("path", "").split("/")
-            if path_parts:
-              return path_parts[-1]
+  if roles_resp.status_code == 200:
+    for r in roles_resp.json().get("groupRoles", []):
+      if r.get("displayName", "").lower() == rank_name.lower():
+        path_parts = r.get("path", "").split("/")
+        if path_parts:
+          return path_parts[-1]
 
-    v1_roles_url = f"https://groups.roblox.com/v1/groups/{group_id}/roles"
-    async with session.get(v1_roles_url) as v1_resp:
-      if v1_resp.status == 200:
-        v1_json = await v1_resp.json()
-        for r in v1_json.get("roles", []):
-          if r.get("name", "").lower() == rank_name.lower():
-            return str(r.get("id"))
+  v1_roles_url = f"https://groups.roblox.com/v1/groups/{group_id}/roles"
+  v1_resp = await asyncio.to_thread(requests.get, v1_roles_url, timeout=10)
+  if v1_resp.status_code == 200:
+    for r in v1_resp.json().get("roles", []):
+      if r.get("name", "").lower() == rank_name.lower():
+        return str(r.get("id"))
 
   return None
 
 
-async def find_membership_path(
-    session: aiohttp.ClientSession, group_id: str, roblox_user_id: int
+def _find_membership_path_sync(
+    group_id: str, roblox_user_id: int
 ) -> tuple[str | None, str | None]:
   headers = {"x-api-key": ROBLOX_API_KEY} if ROBLOX_API_KEY else {}
   member_list_url = (
@@ -293,24 +293,24 @@ async def find_membership_path(
     if page_token:
       params["pageToken"] = page_token
 
-    async with session.get(
-        member_list_url, headers=headers, params=params
-    ) as member_resp:
-      if member_resp.status != 200:
-        err_text = await member_resp.text()
-        return (
-            None,
-            f"Failed to fetch memberships ({member_resp.status}): {err_text}",
-        )
+    member_resp = requests.get(
+        member_list_url, headers=headers, params=params, timeout=10
+    )
+    if member_resp.status_code != 200:
+      return (
+          None,
+          f"Failed to fetch memberships ({member_resp.status_code}):"
+          f" {member_resp.text}",
+      )
 
-      payload = await member_resp.json()
-      for member in payload.get("groupMemberships", []):
-        if member.get("user", "").endswith(f"/{roblox_user_id}"):
-          return member.get("path"), None
+    payload = member_resp.json()
+    for member in payload.get("groupMemberships", []):
+      if member.get("user", "").endswith(f"/{roblox_user_id}"):
+        return member.get("path"), None
 
-      page_token = payload.get("nextPageToken")
-      if not page_token:
-        break
+    page_token = payload.get("nextPageToken")
+    if not page_token:
+      break
 
   return None, None
 
@@ -327,61 +327,64 @@ async def apply_group_rank(
       if ROBLOX_API_KEY
       else {"Content-Type": "application/json"}
   )
-  timeout = aiohttp.ClientTimeout(total=10)
 
-  async with aiohttp.ClientSession(timeout=timeout) as session:
-    target_membership_path, err = await find_membership_path(
-        session, group_id, roblox_user_id
+  target_membership_path, err = await asyncio.to_thread(
+      _find_membership_path_sync, group_id, roblox_user_id
+  )
+  if err:
+    return False, err
+
+  if not target_membership_path:
+    requests_url = (
+        f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests"
+    )
+    get_reqs = await asyncio.to_thread(
+        requests.get, requests_url, headers=headers, timeout=10
+    )
+
+    target_request_path = None
+    if get_reqs.status_code == 200:
+      for req in get_reqs.json().get("groupJoinRequests", []):
+        if req.get("user", "").endswith(str(roblox_user_id)):
+          target_request_path = req.get("path")
+          break
+
+    if not target_request_path:
+      return (
+          False,
+          "User is not in the group and has not sent a manual join request.",
+      )
+
+    accept_url = f"https://apis.roblox.com/cloud/v2/{target_request_path}:accept"
+    accept_resp = await asyncio.to_thread(
+        requests.post, accept_url, headers=patch_headers, json={}, timeout=10
+    )
+    if accept_resp.status_code != 200:
+      return (
+          False,
+          f"Failed to auto-accept join request: {accept_resp.text}",
+      )
+
+    target_membership_path, err = await asyncio.to_thread(
+        _find_membership_path_sync, group_id, roblox_user_id
     )
     if err:
       return False, err
 
-    if not target_membership_path:
-      requests_url = (
-          f"https://apis.roblox.com/cloud/v2/groups/{group_id}/join-requests"
-      )
-      async with session.get(requests_url, headers=headers) as get_reqs:
-        target_request_path = None
-        if get_reqs.status == 200:
-          req_json = await get_reqs.json()
-          for req in req_json.get("groupJoinRequests", []):
-            if req.get("user", "").endswith(str(roblox_user_id)):
-              target_request_path = req.get("path")
-              break
+  if not target_membership_path:
+    return False, "Failed to locate membership resource path."
 
-      if not target_request_path:
-        return (
-            False,
-            "User is not in the group and has not sent a manual join request.",
-        )
+  update_url = f"https://apis.roblox.com/cloud/v2/{target_membership_path}"
+  update_resp = await asyncio.to_thread(
+      requests.patch,
+      update_url,
+      headers=patch_headers,
+      json={"role": f"groups/{group_id}/roles/{target_role_id}"},
+      timeout=10,
+  )
 
-      accept_url = f"https://apis.roblox.com/cloud/v2/{target_request_path}:accept"
-      async with session.post(
-          accept_url, headers=patch_headers, json={}
-      ) as accept_resp:
-        if accept_resp.status != 200:
-          return (
-              False,
-              f"Failed to auto-accept join request: {await accept_resp.text()}",
-          )
-
-      target_membership_path, err = await find_membership_path(
-          session, group_id, roblox_user_id
-      )
-      if err:
-        return False, err
-
-    if not target_membership_path:
-      return False, "Failed to locate membership resource path."
-
-    update_url = f"https://apis.roblox.com/cloud/v2/{target_membership_path}"
-    async with session.patch(
-        update_url,
-        headers=patch_headers,
-        json={"role": f"groups/{group_id}/roles/{target_role_id}"},
-    ) as update_resp:
-      if update_resp.status != 200:
-        return False, f"Failed to update rank: {await update_resp.text()}"
+  if update_resp.status_code != 200:
+    return False, f"Failed to update rank: {update_resp.text}"
 
   return True, "Success"
 
@@ -391,25 +394,25 @@ async def kick_from_group(
 ) -> tuple[bool, str]:
   """Removes a user from a Roblox group via Open Cloud v2 DELETE membership."""
   headers = {"x-api-key": ROBLOX_API_KEY} if ROBLOX_API_KEY else {}
-  timeout = aiohttp.ClientTimeout(total=10)
 
-  async with aiohttp.ClientSession(timeout=timeout) as session:
-    membership_path, err = await find_membership_path(
-        session, group_id, roblox_user_id
+  membership_path, err = await asyncio.to_thread(
+      _find_membership_path_sync, group_id, roblox_user_id
+  )
+  if err:
+    return False, err
+  if not membership_path:
+    return False, f"Not a member of group `{group_id}`."
+
+  delete_url = f"https://apis.roblox.com/cloud/v2/{membership_path}"
+  delete_resp = await asyncio.to_thread(
+      requests.delete, delete_url, headers=headers, timeout=10
+  )
+
+  if delete_resp.status_code not in (200, 204):
+    return (
+        False,
+        f"API error ({delete_resp.status_code}): {delete_resp.text}",
     )
-    if err:
-      return False, err
-    if not membership_path:
-      return False, f"Not a member of group `{group_id}`."
-
-    delete_url = f"https://apis.roblox.com/cloud/v2/{membership_path}"
-    async with session.delete(delete_url, headers=headers) as delete_resp:
-      if delete_resp.status not in (200, 204):
-        err_body = await delete_resp.text()
-        return (
-            False,
-            f"API error ({delete_resp.status}): {err_body}",
-        )
 
   return True, "Kicked"
 
@@ -598,20 +601,21 @@ async def main_rank_autocomplete(
 
   group_id = COMMAND_IDS[command_val]["main_id"]
   headers = {"x-api-key": ROBLOX_API_KEY} if ROBLOX_API_KEY else {}
-  timeout = aiohttp.ClientTimeout(total=5)
 
   try:
     url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles"
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-      async with session.get(url, headers=headers) as resp:
-        if resp.status == 200:
-          r_json = await resp.json()
-          choices = []
-          for role in r_json.get("groupRoles", []):
-            name = role.get("displayName") or role.get("name")
-            if name and current.lower() in name.lower():
-              choices.append(app_commands.Choice(name=name, value=name))
-          return choices[:25]
+    resp = await asyncio.to_thread(
+        requests.get, url, headers=headers, timeout=5
+    )
+    if resp.status_code == 200:
+      roles = resp.json().get("groupRoles", [])
+      choices = []
+      for role in roles:
+        name = role.get("displayName") or role.get("name")
+        if name and current.lower() in name.lower():
+          choices.append(app_commands.Choice(name=name, value=name))
+      if choices:
+        return choices[:25]
   except Exception:
     pass
   return []
@@ -632,20 +636,21 @@ async def division_rank_autocomplete(
 
   group_id = divisions[division_val]
   headers = {"x-api-key": ROBLOX_API_KEY} if ROBLOX_API_KEY else {}
-  timeout = aiohttp.ClientTimeout(total=5)
 
   try:
     url = f"https://apis.roblox.com/cloud/v2/groups/{group_id}/roles"
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-      async with session.get(url, headers=headers) as resp:
-        if resp.status == 200:
-          r_json = await resp.json()
-          choices = []
-          for role in r_json.get("groupRoles", []):
-            name = role.get("displayName") or role.get("name")
-            if name and current.lower() in name.lower():
-              choices.append(app_commands.Choice(name=name, value=name))
-          return choices[:25]
+    resp = await asyncio.to_thread(
+        requests.get, url, headers=headers, timeout=5
+    )
+    if resp.status_code == 200:
+      roles = resp.json().get("groupRoles", [])
+      choices = []
+      for role in roles:
+        name = role.get("displayName") or role.get("name")
+        if name and current.lower() in name.lower():
+          choices.append(app_commands.Choice(name=name, value=name))
+      if choices:
+        return choices[:25]
   except Exception:
     pass
   return []
