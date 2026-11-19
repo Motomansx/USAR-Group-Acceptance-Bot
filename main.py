@@ -46,6 +46,12 @@ def check_accepter_permission(interaction: discord.Interaction) -> bool:
   return has_permission
 
 
+def _extract_resource_id(resource_value: str | None) -> str:
+  if not resource_value:
+    return ""
+  return resource_value.rstrip("/").split("/")[-1]
+
+
 async def resolve_roblox_user(username: str) -> tuple[int | None, str]:
   """Resolves a Roblox username to a user ID, preferring an exact username match."""
   clean_name = username.strip()
@@ -287,6 +293,7 @@ def _find_membership_path_sync(
       f"https://apis.roblox.com/cloud/v2/groups/{group_id}/memberships"
   )
   page_token = None
+  target_uid_str = str(roblox_user_id)
 
   while True:
     params = {"maxPageSize": 100}
@@ -305,8 +312,13 @@ def _find_membership_path_sync(
 
     payload = member_resp.json()
     for member in payload.get("groupMemberships", []):
-      if member.get("user", "").endswith(f"/{roblox_user_id}"):
-        return member.get("path"), None
+      if _extract_resource_id(member.get("user")) == target_uid_str:
+        mem_path = member.get("path")
+        if mem_path:
+          return mem_path.lstrip("/"), None
+        mem_id = _extract_resource_id(member.get("name"))
+        if mem_id:
+          return f"groups/{group_id}/memberships/{mem_id}", None
 
     page_token = payload.get("nextPageToken")
     if not page_token:
@@ -345,8 +357,8 @@ async def apply_group_rank(
     target_request_path = None
     if get_reqs.status_code == 200:
       for req in get_reqs.json().get("groupJoinRequests", []):
-        if req.get("user", "").endswith(str(roblox_user_id)):
-          target_request_path = req.get("path")
+        if _extract_resource_id(req.get("user")) == str(roblox_user_id):
+          target_request_path = (req.get("path") or "").lstrip("/")
           break
 
     if not target_request_path:
@@ -408,13 +420,20 @@ async def kick_from_group(
       requests.delete, delete_url, headers=headers, timeout=10
   )
 
-  if delete_resp.status_code not in (200, 204):
+  if delete_resp.status_code in (200, 204):
+    return True, "Kicked"
+
+  if delete_resp.status_code == 404:
     return (
         False,
-        f"API error ({delete_resp.status_code}): {delete_resp.text}",
+        f"404 Not Found for `{membership_path}` (verify membership exists & API"
+        " key has group membership delete permission).",
     )
 
-  return True, "Kicked"
+  return (
+      False,
+      f"API error ({delete_resp.status_code}): {delete_resp.text}",
+  )
 
 
 class HighCommandReviewView(discord.ui.View):
