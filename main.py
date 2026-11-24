@@ -12,6 +12,7 @@ intents.message_content = True  # Required to read messages in the discharge cha
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 ROBLOX_API_KEY = os.getenv("ROBLOX_API_KEY")
+ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")  # Needed for kicking via Groups v1 API
 
 # Target Server and Discharge Channel Constants
 TARGET_GUILD_ID = 1526053959813566595
@@ -397,38 +398,46 @@ async def apply_group_rank(
   return True, "Success"
 
 
+def _kick_from_group_v1_sync(
+    group_id: str, roblox_user_id: int
+) -> tuple[bool, str]:
+  """Kicks a member using Groups v1 API + .ROBLOSECURITY cookie + X-CSRF-TOKEN."""
+  if not ROBLOX_COOKIE:
+    return (
+        False,
+        "Missing `ROBLOX_COOKIE` environment variable (Open Cloud v2 does not"
+        " support kicking group members).",
+    )
+
+  session = requests.Session()
+  session.cookies[".ROBLOSECURITY"] = ROBLOX_COOKIE.strip()
+
+  kick_url = (
+      f"https://groups.roblox.com/v1/groups/{group_id}/users/{roblox_user_id}"
+  )
+
+  resp = session.delete(kick_url, timeout=10)
+  if resp.status_code == 403 and "x-csrf-token" in resp.headers:
+    session.headers["x-csrf-token"] = resp.headers["x-csrf-token"]
+    resp = session.delete(kick_url, timeout=10)
+
+  if resp.status_code == 200:
+    return True, "Kicked"
+
+  try:
+    err_data = resp.json().get("errors", [{}])[0]
+    err_msg = err_data.get("message") or resp.text
+  except Exception:
+    err_msg = resp.text
+
+  return False, f"Groups API ({resp.status_code}): {err_msg}"
+
+
 async def kick_from_group(
     group_id: str, roblox_user_id: int
 ) -> tuple[bool, str]:
-  """Removes a user from a Roblox group via Open Cloud v2 DELETE membership."""
-  headers = {"x-api-key": ROBLOX_API_KEY} if ROBLOX_API_KEY else {}
-
-  membership_path, err = await asyncio.to_thread(
-      _find_membership_path_sync, group_id, roblox_user_id
-  )
-  if err:
-    return False, err
-  if not membership_path:
-    return False, f"Not a member of group `{group_id}`."
-
-  delete_url = f"https://apis.roblox.com/cloud/v2/{membership_path}"
-  delete_resp = await asyncio.to_thread(
-      requests.delete, delete_url, headers=headers, timeout=10
-  )
-
-  if delete_resp.status_code in (200, 204):
-    return True, "Kicked"
-
-  if delete_resp.status_code == 404:
-    return (
-        False,
-        f"404 Not Found for `{membership_path}` (verify membership exists & API"
-        " key has group membership delete permission).",
-    )
-
-  return (
-      False,
-      f"API error ({delete_resp.status_code}): {delete_resp.text}",
+  return await asyncio.to_thread(
+      _kick_from_group_v1_sync, group_id, roblox_user_id
   )
 
 
