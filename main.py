@@ -239,13 +239,11 @@ async def fetch_security_background_check(
   # 4. Discord Identity & Timestamps
   data["discord_user"] = str(discord_member)
   data["discord_created"] = discord_member.created_at
-  data["discord_joined"] = (
-      discord_member.joined_at
-      if discord_member.joined_at
-      else datetime.now(timezone.utc)
-  )
+  joined_at = getattr(discord_member, "joined_at", None)
+  data["discord_joined"] = joined_at if joined_at else datetime.now(timezone.utc)
+  member_roles = getattr(discord_member, "roles", [])
   data["clearance_roles"] = [
-      r.name for r in discord_member.roles if r.name != "@everyone"
+      r.name for r in member_roles if r.name != "@everyone"
   ]
 
   risk = "GOOD (Low Risk)"
@@ -1003,6 +1001,187 @@ async def grouprequest(
   )
 
 
+# Group & Security Background Check Command
+@bot.tree.command(
+    name="groupcheck",
+    description="Run a background, group rank, and discharge check on a user.",
+)
+@app_commands.describe(
+    username="Roblox Username",
+    discordid="Discord User ID",
+    command="Command",
+    division="Division",
+)
+@app_commands.choices(
+    command=[
+        app_commands.Choice(
+            name="Military Police Corps", value="Military Police Corps"
+        ),
+    ],
+    division=[
+        app_commands.Choice(name="14th Brigade", value="14th Brigade"),
+    ],
+)
+async def groupcheck(
+    interaction: discord.Interaction,
+    username: str,
+    discordid: str,
+    command: app_commands.Choice[str],
+    division: app_commands.Choice[str] = None,
+):
+  config = SERVER_CONFIGS.get(interaction.guild_id, {})
+  requester_role_id = config.get("requester_role")
+  can_check = check_accepter_permission(interaction)
+  if requester_role_id and not can_check:
+    role = interaction.guild.get_role(requester_role_id)
+    if role and role in interaction.user.roles:
+      can_check = True
+
+  if not can_check:
+    await interaction.response.send_message(
+        "❌ You do not have permission to run `/groupcheck`.",
+        ephemeral=True,
+    )
+    return
+
+  await interaction.response.defer(ephemeral=False)
+
+  try:
+    discord_id_int = int(discordid.strip())
+    discord_member = interaction.guild.get_member(discord_id_int)
+    if not discord_member:
+      discord_member = await bot.fetch_user(discord_id_int)
+  except ValueError:
+    discord_member = None
+
+  if not discord_member:
+    await interaction.followup.send(
+        f"❌ Could not find a Discord user with ID `{discordid}`. Please check"
+        " the ID and try again.",
+        ephemeral=True,
+    )
+    return
+
+  roblox_user_id, resolved_name = await resolve_roblox_user(username)
+  if not roblox_user_id:
+    await interaction.followup.send(
+        f"❌ Failed to find Roblox user `{username}` via search API.",
+        ephemeral=True,
+    )
+    return
+
+  command_info = COMMAND_IDS[command.name]
+  main_group_id = command_info["main_id"]
+
+  bg = await fetch_security_background_check(
+      interaction.guild,
+      discord_member,
+      resolved_name,
+      roblox_user_id,
+      main_group_id,
+  )
+
+  division_rank_display = "Not Checked"
+  if division:
+    div_group_id = command_info["divisions"].get(division.name)
+    division_rank_display = "Guest / Not in Division"
+    if div_group_id:
+      try:
+        group_roles_url = (
+            f"https://groups.roblox.com/v1/users/{roblox_user_id}/groups/roles"
+        )
+        g_resp = await asyncio.to_thread(
+            requests.get, group_roles_url, timeout=5
+        )
+        if g_resp.status_code == 200:
+          for g in g_resp.json().get("data", []):
+            if str(g.get("group", {}).get("id")) == str(div_group_id):
+              division_rank_display = g.get("role", {}).get("name", "Member")
+              break
+      except Exception:
+        division_rank_display = "Unknown"
+
+  created_years = round(bg["account_age_days"] / 365.25, 1)
+  roles_str = (
+      ", ".join([f"@{r}" for r in bg["clearance_roles"][:8]])
+      if bg.get("clearance_roles")
+      else "@None"
+  )
+  aliases_formatted = (
+      ", ".join(bg["aliases"]) if bg["aliases"] else "No recorded name changes"
+  )
+  discord_created_unix = int(bg["discord_created"].timestamp())
+  server_join_unix = int(bg["discord_joined"].timestamp())
+
+  embed_color = (
+      discord.Color.red()
+      if bg["discharge_count"] > 0
+      else (
+          discord.Color.orange()
+          if bg["account_age_days"] < 30
+          else discord.Color.green()
+      )
+  )
+
+  embed = discord.Embed(
+      title=f"🔎 Group & Security Check: {resolved_name}",
+      description=f"**Status:** `{bg['risk_status']}`",
+      color=embed_color,
+      timestamp=datetime.now(timezone.utc),
+  )
+  embed.set_thumbnail(
+      url=f"https://www.roblox.com/headshot-thumbnail/image?userId={roblox_user_id}&width=420&height=420&format=png"
+  )
+  embed.add_field(
+      name="Roblox Identity",
+      value=(
+          f"• **Profile:** [{resolved_name}](https://www.roblox.com/users/{roblox_user_id}/profile)\n"
+          f"• **User ID:** `{roblox_user_id}`\n"
+          f"• **Account Age:** ~{created_years} yrs ({bg['account_age_days']} days)\n"
+          f"• **Badges (Sample):** {bg['badges_earned']}"
+      ),
+      inline=False,
+  )
+  embed.add_field(
+      name="Group & Division Status",
+      value=(
+          f"• **Command ({command.name}):** `{bg['current_rank']}`\n"
+          + (
+              f"• **Division ({division.name}):** `{division_rank_display}`\n"
+              if division
+              else ""
+          )
+      ),
+      inline=False,
+  )
+  embed.add_field(
+      name="Discharge Records",
+      value=(
+          f"• **Total Found:** {bg['discharge_count']}\n"
+          f"• {bg['discharge_log_summary']}"
+      ),
+      inline=False,
+  )
+  embed.add_field(
+      name="Discord Identity",
+      value=(
+          f"• **User:** {discord_member.mention} (`{discord_member.id}`)\n"
+          f"• **Account Created:** <t:{discord_created_unix}:R>\n"
+          f"• **Server Joined:** <t:{server_join_unix}:R>\n"
+          f"• **Roles:** {roles_str}"
+      ),
+      inline=False,
+  )
+  embed.add_field(
+      name="Alias History",
+      value=aliases_formatted[:1024],
+      inline=False,
+  )
+  embed.set_footer(text=f"Requested by {interaction.user}")
+
+  await interaction.followup.send(embed=embed)
+
+
 # Direct Group Rank Update Command (Restricted to Accepters/Admins)
 @bot.tree.command(
     name="changerank",
@@ -1216,4 +1395,3 @@ async def on_ready():
 
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
-
